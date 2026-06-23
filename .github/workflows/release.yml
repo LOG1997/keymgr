@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x86_64
+          # macOS x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_suffix: macos-x86_64
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_suffix: macos-aarch64
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_suffix: windows-x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf keymgr-${{ matrix.artifact_suffix }}.tar.gz keymgr
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a keymgr-${{ matrix.artifact_suffix }}.zip keymgr.exe
+
+      - name: Generate SHA256 checksums
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          sha256sum keymgr-${{ matrix.artifact_suffix }}.tar.gz > keymgr-${{ matrix.artifact_suffix }}.tar.gz.sha256
+
+      - name: Generate SHA256 checksums (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          (Get-FileHash keymgr-${{ matrix.artifact_suffix }}.zip -Algorithm SHA256).Hash.ToLower() + "  keymgr-${{ matrix.artifact_suffix }}.zip" | Out-File -Encoding ASCII keymgr-${{ matrix.artifact_suffix }}.zip.sha256
+
+      - name: Upload artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/${{ matrix.target }}/release/keymgr-${{ matrix.artifact_suffix }}.tar.gz
+            target/${{ matrix.target }}/release/keymgr-${{ matrix.artifact_suffix }}.tar.gz.sha256
+            target/${{ matrix.target }}/release/keymgr-${{ matrix.artifact_suffix }}.zip
+            target/${{ matrix.target }}/release/keymgr-${{ matrix.artifact_suffix }}.zip.sha256
+          fail_on_unmatched_files: false
