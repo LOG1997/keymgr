@@ -1,6 +1,5 @@
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use crate::error::KeymgrError;
@@ -22,15 +21,11 @@ pub fn master_hash_path() -> PathBuf {
     data_dir().join("master.hash")
 }
 
-/// 确保数据目录存在，并设置权限为 0o700。
+/// 确保数据目录存在。在 Unix 上同时设置目录权限为 0o700。
 pub fn ensure_data_dir() -> Result<(), KeymgrError> {
     let dir = data_dir();
     fs::create_dir_all(&dir)?;
-
-    let mut perms = fs::metadata(&dir)?.permissions();
-    perms.set_mode(0o700);
-    fs::set_permissions(&dir, perms)?;
-
+    set_dir_permissions(&dir)?;
     Ok(())
 }
 
@@ -44,19 +39,17 @@ pub fn read_vault() -> Result<Vault, KeymgrError> {
     Ok(serde_json::from_str(&content)?)
 }
 
-/// 写入 vault.json，设置文件权限为 0o600。
+/// 写入 vault.json。在 Unix 上同时设置文件权限为 0o600。
 pub fn write_vault(vault: &Vault) -> Result<(), KeymgrError> {
     let path = vault_path();
     let content = serde_json::to_string_pretty(vault)?;
 
     let mut file = fs::File::create(&path)?;
     file.write_all(content.as_bytes())?;
+    // drop file 以便后续 set_permissions 不会遇到共享冲突
+    drop(file);
 
-    // 设置权限 600
-    let mut perms = file.metadata()?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(&path, perms)?;
-
+    set_file_permissions(&path)?;
     Ok(())
 }
 
@@ -70,22 +63,52 @@ pub fn read_master_hash() -> Result<MasterHash, KeymgrError> {
     Ok(serde_json::from_str(&content)?)
 }
 
-/// 写入 master.hash，设置文件权限为 0o600。
+/// 写入 master.hash。在 Unix 上同时设置文件权限为 0o600。
 pub fn write_master_hash(master: &MasterHash) -> Result<(), KeymgrError> {
     let path = master_hash_path();
     let content = serde_json::to_string_pretty(master)?;
 
     let mut file = fs::File::create(&path)?;
     file.write_all(content.as_bytes())?;
+    drop(file);
 
-    let mut perms = file.metadata()?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(&path, perms)?;
-
+    set_file_permissions(&path)?;
     Ok(())
 }
 
 /// 检查是否已初始化（master.hash 是否存在）
 pub fn is_initialized() -> bool {
     master_hash_path().exists()
+}
+
+// ─── 平台特定的权限设置 ──────────────────────────
+
+#[cfg(unix)]
+fn set_dir_permissions(path: &std::path::Path) -> Result<(), KeymgrError> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o700);
+    fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_dir_permissions(_path: &std::path::Path) -> Result<(), KeymgrError> {
+    // Windows 上不设置 POSIX 权限
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_file_permissions(path: &std::path::Path) -> Result<(), KeymgrError> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_file_permissions(_path: &std::path::Path) -> Result<(), KeymgrError> {
+    // Windows 上不设置 POSIX 权限
+    Ok(())
 }
